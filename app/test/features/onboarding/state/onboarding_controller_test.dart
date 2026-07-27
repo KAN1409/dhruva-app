@@ -120,12 +120,11 @@ void main() {
       );
     });
 
-    test('a large-RAM device gets the most capable (largest) text model', () {
+    test('recommends the fastest (smallest) comfortable model for a snappy '
+        'first run, not the largest — and agrees with the Discover tab', () {
       const ram = 34359738368; // 32 GiB — everything is comfortable.
-      final largestText = starterModelCatalog
-          .where((m) => !m.isVision)
-          .reduce((a, b) => a.approxSizeBytes >= b.approxSizeBytes ? a : b);
-      expect(recommendedStarterModel(ram).repoId, largestText.repoId);
+      final smallestText = starterModelCatalog.firstWhere((m) => !m.isVision);
+      expect(recommendedStarterModel(ram).repoId, smallestText.repoId);
     });
   });
 

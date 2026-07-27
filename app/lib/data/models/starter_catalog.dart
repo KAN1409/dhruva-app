@@ -136,25 +136,32 @@ final _friendlyNamesByRepo = {
 };
 
 /// The single model onboarding pre-selects and badges "Recommended" (PRD v0.3
-/// WS2): the MOST capable text model that still runs *comfortably* on this
-/// device, so a first-timer gets the best experience their phone can hold
-/// without touching a quant menu.
+/// WS2): the FASTEST text model that still runs comfortably — i.e. the
+/// SMALLEST comfortable pick — so a first-timer's very first reply streams
+/// instantly and wins their trust. (This deliberately matches the Discover
+/// tab's "Recommended" badge, which also picks smallest-comfortable — the two
+/// surfaces must agree.)
+///
+/// Why smallest, not largest: on-device decode speed scales inversely with
+/// model size, and a snappy first impression matters far more to a new user
+/// than a marginally smarter but slower answer. They can step up to a bigger
+/// model any time from the full curated list.
 ///
 /// Rules, in order:
-/// 1. Largest catalog entry classified [ModelTier.comfortable] on the device.
-/// 2. Else the largest entry that's at least [ModelTier.possible].
+/// 1. Smallest catalog entry classified [ModelTier.comfortable] on the device.
+/// 2. Else the smallest entry that's at least [ModelTier.possible].
 /// 3. Else (RAM unknown, or nothing fits) the smallest entry — always
 ///    runnable, never a dead-end.
 ///
 /// Vision models are excluded: the first-run pick is a chat model (vision is
 /// a specialty the catalog surfaces separately). The catalog is ordered
-/// smallest → largest, so the LAST match in a pass is the largest.
+/// smallest → largest, so the FIRST match in a pass is the smallest.
 StarterModel recommendedStarterModel(int? totalRamBytes) {
   final textModels = starterModelCatalog.where((m) => !m.isVision).toList();
   if (totalRamBytes == null) return textModels.first;
 
-  StarterModel? bestComfortable;
-  StarterModel? bestPossible;
+  StarterModel? smallestComfortable;
+  StarterModel? smallestPossible;
   for (final m in textModels) {
     final tier = classifyModelTier(
       fileSizeBytes: m.approxSizeBytes,
@@ -162,12 +169,12 @@ StarterModel recommendedStarterModel(int? totalRamBytes) {
     );
     switch (tier) {
       case ModelTier.comfortable:
-        bestComfortable = m;
+        smallestComfortable ??= m;
       case ModelTier.possible:
-        bestPossible = m;
+        smallestPossible ??= m;
       case ModelTier.notRecommended:
         break;
     }
   }
-  return bestComfortable ?? bestPossible ?? textModels.first;
+  return smallestComfortable ?? smallestPossible ?? textModels.first;
 }
