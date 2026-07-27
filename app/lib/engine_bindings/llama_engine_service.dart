@@ -43,6 +43,21 @@ import 'package:llama_cpp_dart/llama_cpp_dart.dart' as llama;
 
 import 'engine_service.dart';
 
+/// Decode/prefill thread count for llama.cpp. The binding's default (0) runs a
+/// SINGLE thread on Android (~1 tok/s on-device — the felt "it doesn't work on
+/// mobile"). On a big.LITTLE SoC, using EVERY logical core (including the slow
+/// efficiency cores) actually hurts: the little cores stall the per-token sync
+/// barrier. So use all cores on small chips, else about half, bounded to a
+/// sane 2..6.
+// ponytail: half-cores heuristic, no per-SoC perf-core table; add one only if
+// a real device measurably wants it.
+int _inferenceThreadCount() {
+  final n = Platform.numberOfProcessors;
+  if (n <= 1) return 1;
+  if (n <= 4) return n;
+  return (n ~/ 2).clamp(4, 6);
+}
+
 /// Marker mtmd substitutes with the next image's chunks, one per image, in
 /// order. Must match [llama.MultimodalParams.mediaMarker] (its default).
 const _mediaMarker = '<__media__>';
@@ -220,6 +235,11 @@ final class LlamaEngineService implements EngineService {
             nBatch: params.batchSize,
             nUbatch: params.batchSize,
             nSeqMax: params.maxSequences,
+            // llama_cpp_dart defaults nThreads to 0, which Android maps to a
+            // SINGLE decode thread — measured ~1 tok/s on-device, the cause of
+            // the app feeling "broken" on real phones. Drive real threads.
+            nThreads: _inferenceThreadCount(),
+            nThreadsBatch: _inferenceThreadCount(),
           ),
           multimodalParams: mmproj == null
               ? null

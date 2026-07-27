@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:crypto/crypto.dart';
 import 'package:drift/drift.dart' show Value;
@@ -495,7 +496,12 @@ final class DownloadManager {
     String? actualSha256;
     if (request.expectedSha256 != null) {
       try {
-        actualSha256 = await streamingSha256(file);
+        // Pure-Dart sha256 over a multi-hundred-MB GGUF pins a CPU core for
+        // many seconds — minutes on a slow single-core device. On the root
+        // isolate that stalls the "verifying" step so a finished download looks
+        // frozen at 100%. Hash on a background isolate: a spare core does the
+        // work and the UI isolate stays responsive.
+        actualSha256 = await Isolate.run(() => streamingSha256(File(path)));
       } on StorageIoFailure catch (readFailure) {
         await _safeDelete(file);
         _active.remove(request.taskId);
