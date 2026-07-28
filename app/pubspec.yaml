@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 0.4.1+77
+version: 0.4.2+78
 
 environment:
   sdk: ^3.11.0
@@ -120,6 +120,8 @@ dev_dependencies:
   drift_dev: 2.34.0 # exact-pinned: 2.34.1+ requires analyzer ^13, which
   # conflicts with freezed 3.2.5's analyzer <11 constraint.
   fake_async: ^1.3.1
+  flutter_launcher_icons: ^0.14.1 # generates the adaptive/legacy/iOS launcher
+  # icons from assets/icon/ (config block at the foot of this file).
   flutter_lints: ^6.0.0
   flutter_test:
     sdk: flutter
@@ -214,3 +216,17 @@ flutter:
           weight: 500
         - asset: assets/fonts/NotoSerifDevanagari-Variable.ttf
           weight: 600
+
+# Launcher icons (the pole-star brand mark). Regenerate with:
+#   dart run flutter_launcher_icons
+# Source art lives in assets/icon/ (rendered from the brand SVG). Android uses
+# an adaptive icon: solid navy background (--color-background) + the gold star
+# foreground sized inside the 66% safe zone so no launcher mask clips it.
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/icon/icon.png"
+  adaptive_icon_background: "#0E1220"
+  adaptive_icon_foreground: "assets/icon/foreground.png"
+  min_sdk_android: 26
+  remove_alpha_ios: true

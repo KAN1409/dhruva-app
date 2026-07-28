@@ -9,8 +9,8 @@
 /// alongside `pubspec.yaml` on release.
 library;
 
-const appVersion = '0.4.1';
-const appBuildNumber = '77';
+const appVersion = '0.4.2';
+const appBuildNumber = '78';
 
 const githubUrl = 'https://github.com/AnshRajput/dhruva-app';
 const websiteUrl = 'https://dhruvaai.vercel.app';
