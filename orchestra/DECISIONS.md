@@ -239,3 +239,80 @@ APK, so the user was likely retesting an OLD binary. Fixed: pubspec 0.2.0+2,
 distribute.sh now stamps a unique monotonic build number (git commit count) per
 ship, and About shows the version so the user can confirm they're on the new
 build. On-device Android inference remains the human's retest to confirm.
+
+## IOS METAL WIRING — llama.xcframework vendored + linked (2026-08-01)
+Context: a prior spike (orchestra/research/gpu-offload-gap.md §3.2) found the
+iOS build had ZERO engine wiring — the `llama_cpp_dart` git dependency's
+`llama_cpp.podspec` vendors `build/apple/llama.xcframework`, a build artifact
+absent from the pub-cache checkout, and was never referenced by
+`app/ios/Podfile`. `providers.dart`'s comment claiming iOS "static-links" the
+xcframework was aspirational, not implemented; `EngineLoadFailure` was the real
+runtime outcome. This loop closes that gap (branch `loop/ios-metal-wiring`,
+off `main`).
+Decision: download, don't rebuild — same reasoning as
+`scripts/fetch-android-aar.sh`: our engine pin
+(c6e37785835a189261fab28e53386e4e954f3e42) is 2 pure-Dart commits ahead of
+release tag v0.9.0-dev.9, so the release's `llama-xcframework.zip` is
+native-identical to what the pin would build.
+`scripts/fetch-ios-xcframework.sh` fetches + sha256-verifies it (re-verified
+independently against upstream's own `.sha256` file, not just the value
+handed to the agent — both matched) and vendors it at `app/ios/Vendor/
+llama_cpp/` (podspec + LICENSE copied from the pinned git checkout, since
+those aren't part of the GH release asset). `app/ios/Podfile`'s `target
+'Runner'` block gets `pod 'llama_cpp', :path => .../Vendor/llama_cpp` —
+manual, because `llama_cpp_dart` has no `flutter:` key in its pubspec, so
+CocoaPods autodiscovery never finds it.
+SLICE DECISION (spike's open question, now resolved): the vendored copy drops
+the zip's `macos-arm64` slice (32MB of the 53MB zip). Dhruva's macOS dev/test
+build never touches this pod — it loads raw dylibs from
+`app/.dev-native/macos` (`test/native_test_config.dart`) — so a macOS slice
+here would be permanent dead weight in git history. Committed vendored size:
+~21MB (`ios-arm64` + `ios-arm64-simulator` only; Info.plist's
+`AvailableLibraries` edited to match). If this pod is ever wired into a macOS
+Podfile too, re-run the fetch script with `DROP_SLICES=()` first.
+BUILD FIX (undocumented by the spike, found during wiring): a generic/
+universal simulator build defaults to `ARCHS = "arm64 x86_64"`, but the
+xcframework's `ios-arm64-simulator` slice is arm64-only (matches upstream's
+own asset — Apple Silicon only). CocoaPods' xcframework-slicing script
+requires ONE slice covering every requested arch; with x86_64 in the mix, no
+slice matches, it silently skips the copy, and the linker fails with
+"framework 'llama' not found". Fixed via `Podfile` `post_install`:
+`EXCLUDED_ARCHS[sdk=iphonesimulator*] = "i386 x86_64"` set directly on BOTH
+the Pods-project targets (`llama_cpp` itself runs the slicing script) and the
+Runner user-project target (links the result) — not via an xcconfig line,
+because Flutter's `Debug/Release/Profile.xcconfig` `#include` the Pods-Runner
+xcconfig BEFORE `Generated.xcconfig`, and `Generated.xcconfig` already sets
+the same bracketed key to `i386`, so a later `#include` silently wins over an
+xcconfig-level override; a build setting on the target itself always wins.
+`providers.dart:41-44` and `llama_engine_service.dart:152-155`'s stale
+"statically linked" comments corrected: iOS dynamically embeds + signs the
+framework via CocoaPods `use_frameworks!`; dyld loads it into the process at
+launch, so `LlamaLibrary.loadFromProcess()` (the existing `libraryPath: null`
+branch, unchanged) resolves its symbols. No Dart code change.
+REAL PROOF, not just a compile: `flutter build ios --no-codesign` (device,
+CI parity) and `flutter build ios --simulator` both succeed;
+`app/integration_test/ios_engine_load_test.dart` (new `integration_test` dev
+dependency — the only harness that runs the actual app process ON the iOS
+Simulator, unlike `flutter test`'s host-process real-engine tests) drives
+`LlamaEngineService(libraryPath: null)` — providers.dart's exact iOS
+production config — through `load()` on the real dev-native SmolLM2 GGUF and
+a real `generate()` call: `EngineLoadFailure == null`, `isLoaded == true`, a
+real `EngineCompletion` arrives over the worker-isolate SendPort. Ran twice
+on `iPhone 17 Pro` (iOS 26.5 Simulator), both green. Generated text itself was
+incoherent tokens, not a wiring bug: the test's default (non-greedy,
+temp-0.7, random-seed) params on a raw single-turn prompt with no system
+message reproduce the same character on macOS too (verified directly) — small
+135M-model sampling variance, not iOS-specific; production's coherent replies
+through the full `ChatController` prompt path are already proven separately
+by `chat_controller_real_engine_test.dart` on macOS.
+`make verify` green (906/906 on this branch's base). Out of scope (per task):
+real-device Metal verification, gated on the H4 Apple Developer checkpoint
+(RISKS.md R2) — no signing/distribution attempted.
+CONFLICT FLAGGED, not resolved by this agent: the task brief asked this entry
+to also update `orchestra/research/gpu-offload-gap.md`'s iOS section (now
+partly stale — it describes the pod as "not wired," which this loop fixes),
+but the same brief separately listed that file as a pre-existing uncommitted
+change NOT belonging to this agent, with an explicit instruction not to
+modify it. Not touched; flagged here for the orchestrator to reconcile
+(either fold this loop's summary into that file once its owner's edit lands,
+or supersede it explicitly).
