@@ -1,6 +1,6 @@
 # Brand proposal — Dhruva
 
-Source of truth for the tokens below: `/Users/ansh/AppuInsideEngineering/dhruva-app/design-tokens.json` (v0.1.0). This document is the rationale; the JSON is what ships into Flutter `ThemeData` and the Astro site.
+Source of truth for the tokens below: `/Users/ansh/engineering/dhruva-app/design-tokens.json` (v0.1.0). This document is the rationale; the JSON is what ships into Flutter `ThemeData` and the Astro site.
 
 ## a. Brand narrative
 

@@ -8,13 +8,12 @@
 import 'dart:io';
 
 const _defaultLibDir =
-    '/Users/ansh/AppuInsideEngineering/dhruva-app/app/.dev-native/macos';
+    '/Users/ansh/engineering/dhruva-app/app/.dev-native/macos';
 const _defaultModel =
-    '/Users/ansh/AppuInsideEngineering/dhruva-app/app/.dev-native/models/'
+    '/Users/ansh/engineering/dhruva-app/app/.dev-native/models/'
     'SmolLM2-135M-Instruct-Q4_K_M.gguf';
 
-// This repo lives under .../engineering/AppuInsideEngineering/...; the paths
-// above are the original build-machine layout. Fall back to the models
+// The paths above are the original build-machine layout. Fall back to the models
 // directory relative to this test file so the vision artifacts resolve
 // wherever the checkout sits.
 const _visionModel = '.dev-native/models/SmolVLM-500M-Instruct-Q8_0.gguf';
