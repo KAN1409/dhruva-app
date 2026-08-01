@@ -316,3 +316,33 @@ change NOT belonging to this agent, with an explicit instruction not to
 modify it. Not touched; flagged here for the orchestrator to reconcile
 (either fold this loop's summary into that file once its owner's edit lands,
 or supersede it explicitly).
+
+## IDENTIFIER RENAME — Android applicationId now matches iOS bundle ID (2026-08-01)
+Context: `tech.appuinside.dhruva` (Android's applicationId since Loop 1) could
+not be registered as an Apple App ID, which is why `loop/ios-metal-wiring`
+shipped iOS under `app.dhruva.mobile` instead (commit c116527) — a deliberate
+split at the time. Also resolves the CONFLICT FLAGGED note directly above:
+`orchestra/research/gpu-offload-gap.md` has since landed with its own
+supersession banner marking the iOS-blocked sections stale; no further
+reconciliation needed.
+Decision: rename Android's applicationId to `app.dhruva.mobile` too, so both
+platforms ship under one identifier (`app/android/app/build.gradle.kts`).
+Why: one identifier is simpler to reason about across Firebase, store
+listings, and docs than a permanent per-platform split; Android had no
+external registration constraint blocking the rename, iOS did.
+Consequences: (a) old `tech.appuinside.dhruva` installs do NOT upgrade in
+place — Android treats a new applicationId as a different app, so existing
+testers must uninstall the old app and re-download the new one (they also
+lose any downloaded on-device models, which live under the app's storage).
+(b) New Firebase apps were created since the old Android app entry can't be
+re-pointed to a new package name: Android `1:792596873288:android:
+085525f8ec5de6577bd87d`, iOS `1:792596873288:ios:c3fe8a5329ee4e657bd87d`.
+(c) The two old Firebase apps (`tech.appuinside.dhruva` Android, prior iOS
+entry) are RETAINED for now, not deleted, until testers confirm they've
+migrated to the new package — deleting early would orphan anyone still on
+the old build without a distribution channel to reach them.
+Also recorded here: the Apple Developer account, signing cert, and ad-hoc
+provisioning profile referenced as absent in RISKS.md R2 (and in the "Out of
+scope" note on the IOS METAL WIRING entry above) are now live — see R2's
+2026-08-01 update for the corrected, narrower residual constraint (profile
+covers one device only; real-hardware Metal perf still unmeasured).

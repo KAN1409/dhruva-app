@@ -272,3 +272,50 @@ a time on a shared repo, or nothing. (2) Ship the verified subset, defer the
 unverified feature (playground held out of v0.2.4) rather than ship red. (3)
 On-device screenshotting caught what tests can't (dark theme, nav tab, empty
 states) — kept as the release gate.
+
+## PERF + IOS METAL + RENAME (v0.5.0, 2026-08-01)
+Note: this entry covers the loops between the last LOOP_LOG entry and here
+(KV-reuse perf, iOS Metal wiring, identifier rename); the v0.3.x-v0.4.x
+release cycles in between shipped (see git log: v0.3.0, v0.3.1, v0.4.0,
+v0.4.1, v0.4.2) without a corresponding LOOP_LOG entry — a logging gap, not
+a functional one, flagged here rather than silently continued.
+Shipped this loop:
+(1) PERF — KV-prefix reuse across chat turns (loop/perf-kv-reuse, commit
+7fdceae): the engine now reuses the KV cache prefix instead of recomputing
+it every turn, plus context-shift (`shiftPolicy: auto`) and flash-attn/
+KV-cache-quant knobs. Proven on the real engine (macOS, real SmolLM2):
+prefix reuse measured cold=118 vs warm=17 decoded prompt tokens over a
+4-turn conversation; `flashAttn=on + kvCacheQuant=q8_0` measured to halve KV
+buffer size (2.99 MiB q8_0 vs 5.62 MiB f16 at 512-token context) and
+complete generation successfully. Residual risks recorded as RISKS.md R13
+(context-shift protects generation, not prefill-time overflow) and R14
+(both wins proven on macOS only — Android/iOS on-device unverified, folds
+into R1/R9).
+(2) IOS METAL WIRING — the iOS build had zero llama.cpp engine wiring before
+this loop (`app/ios/Podfile` never referenced the pod despite
+`providers.dart`'s comment claiming it did — see
+`orchestra/research/gpu-offload-gap.md` §2.2/§3.2, now superseded). Vendored
+`llama.xcframework` at `app/ios/Vendor/llama_cpp/`, wired it into the
+Podfile, fixed an arm64-only-simulator link failure, corrected the stale
+"statically linked" doc comments. Real proof: `integration_test/
+ios_engine_load_test.dart` drives a real model load + real `generate()` call
+on the iOS Simulator, green twice. Full detail: DECISIONS.md "IOS METAL
+WIRING". Real-device Metal perf/thermals remain unmeasured (RISKS.md R2).
+(3) IDENTIFIER RENAME — Android's applicationId renamed
+`tech.appuinside.dhruva` → `app.dhruva.mobile` to match iOS (which was
+already on `app.dhruva.mobile` since Apple rejected the original ID). Old
+installs do not upgrade in place; new Firebase apps created for both
+platforms; old Firebase apps retained until testers migrate. Full detail:
+DECISIONS.md "IDENTIFIER RENAME".
+(4) SIGNING — Apple Developer account, `iPhone Distribution` cert, and the
+`dhruva` ad-hoc provisioning profile are live and have already produced a
+signed, distributed IPA. RISKS.md R2 corrected: the real residual constraint
+is a one-device provisioning profile (add tester UDIDs to grow it), not "no
+account" as the doc previously (and now falsely) claimed.
+Shipped v0.5.0 (build 89) to Firebase App Distribution on both Android and
+iOS — the first release where iOS ships a real, working engine rather than
+failing to load.
+Retro: the working tree that produced the live v0.5.0(89) builds was never
+committed, so those builds are not reproducible from any commit in history —
+this loop's own COMMIT phase (this entry included) exists specifically to
+close that gap and redeploy from a clean, reproducible commit.
