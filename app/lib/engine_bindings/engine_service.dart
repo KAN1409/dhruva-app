@@ -63,12 +63,33 @@ final class EngineToken extends EngineEvent {
   const EngineToken({required this.tokenId, required this.text});
 }
 
+/// Emitted mid-stream when the engine discarded older conversation history
+/// from the KV cache to keep generating within the context window (a
+/// context-shift). The system prompt is preserved; [tokensDropped] tokens
+/// were removed from the middle of the history. Purely informational — the
+/// stream continues after this event — but the UI should tell the user their
+/// history was trimmed rather than silently continuing as if nothing
+/// happened.
+final class EngineHistoryTrimmed extends EngineEvent {
+  final int tokensDropped;
+  const EngineHistoryTrimmed({required this.tokensDropped});
+}
+
 /// Terminal event of a generation stream.
 final class EngineCompletion extends EngineEvent {
   final EngineStopReason reason;
 
   /// Number of tokens generated in this run.
   final int tokenCount;
+
+  /// Number of *prompt* tokens actually decoded (prefilled) for this run —
+  /// i.e. excluding whatever prefix was already resident in the KV cache and
+  /// reused from a prior turn. `0` when the engine doesn't track this (e.g.
+  /// [FakeEngineService], or the multimodal path, where mtmd's prefill isn't
+  /// a simple token count). A cold turn's value is the full rendered
+  /// conversation length; a warm turn that reused a shared prefix is much
+  /// smaller — this is the number a prefix-reuse test/telemetry reads.
+  final int promptTokensDecoded;
 
   /// Wall-clock milliseconds spanning command dispatch → this terminal event,
   /// measured on the calling isolate (prompt prefill included). Authoritative
@@ -80,11 +101,25 @@ final class EngineCompletion extends EngineEvent {
   /// shipped because arrival time is already available where the meter lives.
   final int elapsedMs;
   const EngineCompletion({
+    this.promptTokensDecoded = 0,
     required this.reason,
     required this.tokenCount,
     this.elapsedMs = 0,
   });
 }
+
+/// FlashAttention mode for the loaded context (mirrors
+/// `llama_cpp_dart`'s `FlashAttention`, kept neutral so nothing outside
+/// `engine_bindings/` imports the package). `auto` matches today's behavior
+/// (the package's own default) — the backend/model decides.
+enum EngineFlashAttn { auto, off, on }
+
+/// K/V-cache tensor quantization. `f16` matches today's behavior (the
+/// package's default). `q8_0` roughly halves KV-cache memory — more context
+/// for the same RAM on a phone — at a small quality cost. Applied to both K
+/// and V (never split) so the well-known llama.cpp constraint "typeK ==
+/// typeV on most backends" can't be violated by this knob.
+enum EngineKvCacheQuant { f16, q8_0 }
 
 /// Model + context load configuration. A thin, engine-neutral subset of the
 /// underlying params; extend as loops need more knobs.
@@ -115,12 +150,28 @@ final class EngineLoadParams {
   /// a projector to point at.
   final String? mmprojPath;
 
+  /// FlashAttention mode. Defaults to [EngineFlashAttn.auto] — today's
+  /// unchanged behavior.
+  final EngineFlashAttn flashAttn;
+
+  /// K/V-cache tensor quantization. Defaults to [EngineKvCacheQuant.f16] —
+  /// today's unchanged behavior. Setting this to [EngineKvCacheQuant.q8_0]
+  /// *requires* [flashAttn] to be [EngineFlashAttn.on]: quantized KV cache is
+  /// only supported on the flash-attention codepath at the pinned
+  /// llama_cpp_dart commit (`auto` is not enough — it doesn't guarantee flash
+  /// attention actually ends up enabled). [EngineService.load] throws
+  /// [EngineValidationFailure] if this constraint isn't met, rather than
+  /// loading a context that's silently wrong.
+  final EngineKvCacheQuant kvCacheQuant;
+
   const EngineLoadParams({
     this.contextSize = 4096,
     this.gpuLayers = 99,
     this.batchSize = 512,
     this.maxSequences = 1,
     this.mmprojPath,
+    this.flashAttn = EngineFlashAttn.auto,
+    this.kvCacheQuant = EngineKvCacheQuant.f16,
   });
 }
 

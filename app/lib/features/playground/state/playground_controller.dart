@@ -237,6 +237,10 @@ class PlaygroundController extends Notifier<PlaygroundState> {
               case EngineToken():
                 _buffer += event.text;
                 _arrivals.add(DateTime.now());
+              case EngineHistoryTrimmed():
+                // Not surfaced in the Playground UI yet — see the matching
+                // case in ChatController for the same follow-up note.
+                break;
               case EngineCompletion():
                 _flushTimer?.cancel();
                 _flush(isA);

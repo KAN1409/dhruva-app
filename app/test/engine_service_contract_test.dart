@@ -2,6 +2,7 @@
 // Covers streaming, cancel mid-stream, unload-while-streaming, and the
 // EngineFailure taxonomy + mapping (ADR-002).
 
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:dhruva/engine_bindings/engine_service.dart';
@@ -199,6 +200,37 @@ void main() {
           engine.generate(prompt: '  '),
           emitsError(isA<EngineValidationFailure>()),
         );
+      },
+    );
+  });
+
+  // Perf loop: quantized KV cache needs flash attention at the pinned
+  // commit — this is a pre-flight check, so it must fire before any native
+  // work (no dylib/model needed to prove it).
+  group('flashAttn / kvCacheQuant constraint', () {
+    test(
+      'q8_0 kvCacheQuant without flashAttn=on throws EngineValidationFailure '
+      'before any native work',
+      () async {
+        final engine = LlamaEngineService();
+        // Any file that exists passes the pre-flight path-existence check —
+        // the point of this test is that we never get that far into
+        // load(); the constraint check runs first. The running executable
+        // itself is guaranteed to exist regardless of test-runner CWD/entry
+        // conventions (unlike Platform.script, which the Flutter test
+        // harness resolves to a synthetic, nonexistent entrypoint).
+        final existingFile = Platform.resolvedExecutable;
+        await expectLater(
+          () => engine.load(
+            existingFile,
+            params: const EngineLoadParams(
+              kvCacheQuant: EngineKvCacheQuant.q8_0,
+            ),
+          ),
+          throwsA(isA<EngineValidationFailure>()),
+        );
+        expect(engine.isLoaded, isFalse);
+        await engine.dispose();
       },
     );
   });

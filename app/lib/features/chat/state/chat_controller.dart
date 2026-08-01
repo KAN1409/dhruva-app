@@ -834,6 +834,13 @@ class ChatController extends AsyncNotifier<ChatThreadState> {
               case EngineToken():
                 _rawBuffer += event.text;
                 _tokenArrivals.add(DateTime.now());
+              case EngineHistoryTrimmed():
+                // A context-shift discarded older history mid-generation to
+                // keep this reply going. Not surfaced in the UI yet — a
+                // future loop can show a "history trimmed" notice using
+                // event.tokensDropped; for now this just keeps the switch
+                // exhaustive and the stream flowing.
+                break;
               case EngineCompletion():
                 _onCompletion(event);
             }

@@ -54,6 +54,8 @@ void main() {
             case EngineToken():
               count++;
               if (firstTokens.length < 20) firstTokens.add(e.text);
+            case EngineHistoryTrimmed():
+              break;
             case EngineCompletion():
               reason = e.reason;
           }
@@ -176,6 +178,134 @@ void main() {
         );
       },
       timeout: const Timeout(Duration(minutes: 3)),
+    );
+
+    // Prefix-KV reuse (perf loop, main win): a warm turn — continuing a
+    // conversation the engine already has resident in KV — must decode
+    // strictly fewer PROMPT tokens than a cold turn asked to answer the
+    // exact same final conversation from an empty KV. Asserts on the actual
+    // decoded-prompt-token count (EngineCompletion.promptTokensDecoded), not
+    // wall-clock, so it can't pass/fail on machine noise.
+    test('prefix reuse: a warm turn decodes far fewer prompt tokens than a '
+        'cold turn over the same conversation', () async {
+      const loadParams = EngineLoadParams(contextSize: 2048, gpuLayers: 0);
+      await engine.load(paths!.modelPath, params: loadParams);
+
+      Future<(String, int)> ask(List<ChatTurn> messages) async {
+        final buf = StringBuffer();
+        var promptTokensDecoded = -1;
+        await for (final e in engine.generate(
+          messages: messages,
+          params: const EngineGenerateParams(maxTokens: 20, greedy: true),
+        )) {
+          switch (e) {
+            case EngineToken():
+              buf.write(e.text);
+            case EngineHistoryTrimmed():
+              break;
+            case EngineCompletion():
+              promptTokensDecoded = e.promptTokensDecoded;
+          }
+        }
+        return (buf.toString(), promptTokensDecoded);
+      }
+
+      const system = ChatTurn.system(
+        'You are a terse assistant. Answer in one short sentence.',
+      );
+
+      // Build up three real turns on the SAME (warm) engine so there's a
+      // substantial shared prefix by the time we measure.
+      final history = <ChatTurn>[system];
+      for (final q in [
+        'My favourite colour is blue. Say hi.',
+        'My favourite animal is a fox.',
+        'My favourite food is pasta.',
+      ]) {
+        history.add(ChatTurn.user(q));
+        final (reply, _) = await ask(history);
+        expect(
+          reply.trim(),
+          isNotEmpty,
+          reason: 'buildup turn produced no text',
+        );
+        history.add(ChatTurn.assistant(reply));
+      }
+
+      final finalMessages = [
+        ...history,
+        const ChatTurn.user('What is my favourite colour?'),
+      ];
+
+      // Warm: this engine already has turns 1-3 resident in KV.
+      final (warmReply, warmPromptTokens) = await ask(finalMessages);
+      expect(warmReply.trim(), isNotEmpty);
+
+      // Cold reference: reload (fresh isolate → empty KV) and ask the
+      // EXACT same final conversation in one shot.
+      await engine.unload();
+      await engine.load(paths.modelPath, params: loadParams);
+      final (coldReply, coldPromptTokens) = await ask(finalMessages);
+      expect(coldReply.trim(), isNotEmpty);
+
+      // ignore: avoid_print
+      print(
+        'PREFIX REUSE: cold=$coldPromptTokens warm=$warmPromptTokens '
+        'prompt tokens decoded',
+      );
+      expect(coldPromptTokens, greaterThan(0));
+      expect(warmPromptTokens, greaterThan(0));
+      expect(
+        warmPromptTokens,
+        lessThan(coldPromptTokens),
+        reason:
+            'a warm turn must decode strictly fewer prompt tokens than a '
+            'cold turn over the same conversation',
+      );
+      // Sanity margin: three turns of buildup means the reused prefix
+      // should dwarf the new suffix.
+      expect(warmPromptTokens, lessThan(coldPromptTokens ~/ 2));
+    }, timeout: const Timeout(Duration(minutes: 3)));
+
+    // Perf loop: verify flashAttn=on + kvCacheQuant=q8_0 actually loads and
+    // generates on the real engine at this pinned commit, rather than just
+    // trusting the documented "quantized KV needs flash attention" llama.cpp
+    // constraint. If this ever regresses (the combination stops loading, or
+    // loads but decode fails), this test — not a user's phone — is where it
+    // shows up.
+    test(
+      'flashAttn=on + kvCacheQuant=q8_0 loads and generates on the real engine',
+      () async {
+        await engine.load(
+          paths!.modelPath,
+          params: const EngineLoadParams(
+            contextSize: 512,
+            gpuLayers: 0,
+            flashAttn: EngineFlashAttn.on,
+            kvCacheQuant: EngineKvCacheQuant.q8_0,
+          ),
+        );
+        expect(engine.isLoaded, isTrue);
+
+        var tokens = 0;
+        EngineStopReason? reason;
+        await for (final e in engine.generate(
+          prompt: 'The capital of France is',
+          params: const EngineGenerateParams(maxTokens: 16, greedy: true),
+        )) {
+          switch (e) {
+            case EngineToken():
+              tokens++;
+            case EngineHistoryTrimmed():
+              break;
+            case EngineCompletion():
+              reason = e.reason;
+          }
+        }
+        expect(tokens, greaterThan(0));
+        expect(reason, isNotNull);
+      },
+      timeout: const Timeout(Duration(minutes: 2)),
     );
 
     // Loop 4 D4: seed reaches the native sampler. With temperature>0 a fixed

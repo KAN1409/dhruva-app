@@ -62,6 +62,11 @@ int _inferenceThreadCount() {
 /// order. Must match [llama.MultimodalParams.mediaMarker] (its default).
 const _mediaMarker = '<__media__>';
 
+llama.KvCacheType _kvCacheType(EngineKvCacheQuant q) => switch (q) {
+  EngineKvCacheQuant.f16 => llama.KvCacheType.f16,
+  EngineKvCacheQuant.q8_0 => llama.KvCacheType.q8_0,
+};
+
 // ---------------------------------------------------------------------------
 // Error mapping
 // ---------------------------------------------------------------------------
@@ -172,6 +177,8 @@ final class LlamaEngineService implements EngineService {
   StreamController<EngineEvent>? _activeController;
   int? _activeId;
   int _activeTokens = 0;
+  // Set from the worker's _DoneMsg; drives EngineCompletion.promptTokensDecoded.
+  int _activePromptTokensDecoded = 0;
   bool _activeTerminal = false;
   // Wall-clock for the in-flight generation; drives EngineCompletion.elapsedMs.
   Stopwatch? _activeStopwatch;
@@ -203,6 +210,18 @@ final class LlamaEngineService implements EngineService {
     final mmproj = params.mmprojPath;
     if (mmproj != null && !File(mmproj).existsSync()) {
       throw EngineLoadFailure('vision projector not found: $mmproj');
+    }
+    // Encode the pinned-commit constraint rather than hope: quantized KV
+    // cache is only supported on the flash-attention codepath, and `auto`
+    // doesn't guarantee flash attention actually ends up on.
+    if (params.kvCacheQuant != EngineKvCacheQuant.f16 &&
+        params.flashAttn != EngineFlashAttn.on) {
+      throw const EngineValidationFailure(
+        'kvCacheQuant other than f16 requires flashAttn: EngineFlashAttn.on '
+        '(quantized KV cache needs the flash-attention codepath at this '
+        'pinned llama_cpp_dart commit); set flashAttn to on or leave '
+        'kvCacheQuant at f16',
+      );
     }
     if (_isolate != null) await unload();
 
@@ -240,6 +259,15 @@ final class LlamaEngineService implements EngineService {
             // the app feeling "broken" on real phones. Drive real threads.
             nThreads: _inferenceThreadCount(),
             nThreadsBatch: _inferenceThreadCount(),
+            flashAttn: switch (params.flashAttn) {
+              EngineFlashAttn.auto => llama.FlashAttention.auto,
+              EngineFlashAttn.off => llama.FlashAttention.off,
+              EngineFlashAttn.on => llama.FlashAttention.on,
+            },
+            // Never split K/V types (see EngineKvCacheQuant doc) — most
+            // backends require typeK == typeV.
+            typeK: _kvCacheType(params.kvCacheQuant),
+            typeV: _kvCacheType(params.kvCacheQuant),
           ),
           multimodalParams: mmproj == null
               ? null
@@ -293,6 +321,7 @@ final class LlamaEngineService implements EngineService {
     _activeController = controller;
     _activeId = id;
     _activeTokens = 0;
+    _activePromptTokensDecoded = 0;
     _activeTerminal = false;
 
     final sampler = params.greedy
@@ -358,8 +387,15 @@ final class LlamaEngineService implements EngineService {
         if (c != null && !c.isClosed) {
           c.add(EngineToken(tokenId: msg.tokenId, text: msg.text));
         }
+      case _ShiftMsg():
+        if (msg.id != _activeId) return;
+        final c = _activeController;
+        if (c != null && !c.isClosed) {
+          c.add(EngineHistoryTrimmed(tokensDropped: msg.nDiscard));
+        }
       case _DoneMsg():
         if (msg.id != _activeId) return;
+        _activePromptTokensDecoded = msg.promptTokensDecoded;
         _emitTerminal(msg.reason);
         _closeActive(msg.id);
       case _ErrorMsg():
@@ -383,6 +419,7 @@ final class LlamaEngineService implements EngineService {
         EngineCompletion(
           reason: reason,
           tokenCount: _activeTokens,
+          promptTokensDecoded: _activePromptTokensDecoded,
           elapsedMs: _activeStopwatch?.elapsedMilliseconds ?? 0,
         ),
       );
@@ -536,7 +573,22 @@ final class _DoneMsg {
   final int id;
   final EngineStopReason reason;
   final int tokenCount;
-  const _DoneMsg(this.id, this.reason, this.tokenCount);
+  final int promptTokensDecoded;
+  const _DoneMsg(
+    this.id,
+    this.reason,
+    this.tokenCount, {
+    this.promptTokensDecoded = 0,
+  });
+}
+
+/// A context-shift happened mid-generation (older history discarded to make
+/// room). Mirrors [llama.ShiftEvent] across the isolate boundary — see
+/// [EngineHistoryTrimmed].
+final class _ShiftMsg {
+  final int id;
+  final int nDiscard;
+  const _ShiftMsg(this.id, this.nDiscard);
 }
 
 final class _ErrorMsg {
@@ -618,6 +670,11 @@ Future<void> _llamaEngineWorker(_Bootstrap boot) async {
   // Bounded cancel state: only the single in-flight request can be cancelled,
   // so one flag suffices — no unbounded set of stale ids.
   final gate = _GenGate();
+  // Tracks the token sequence resident in KV for seq 0, across calls, for as
+  // long as this worker/isolate lives (i.e. until the next load/unload —
+  // model reload and contextSize changes already spawn a brand-new isolate
+  // with a brand-new _KvState, so no explicit invalidation is needed there).
+  final kv = _KvState();
   final commandRx = ReceivePort();
   final done = Completer<void>();
 
@@ -667,9 +724,14 @@ Future<void> _llamaEngineWorker(_Bootstrap boot) async {
     if (msg is _GenerateCommand) {
       final hasMedia = msg.messages?.any((m) => m.media.isNotEmpty) ?? false;
       if (hasMedia) {
+        // The media path always fully resets KV before its own prefill (see
+        // its comment below) and isn't token-addressable the way `kv.tokens`
+        // needs — invalidate eagerly so the NEXT text turn never assumes a
+        // resident prefix that this call just wiped out from under it.
+        kv.tokens = const [];
         unawaited(_runGenerateMedia(msg, context, mtmd, template, gate, reply));
       } else {
-        unawaited(_runGenerate(msg, session, template, gate, reply));
+        unawaited(_runGenerate(msg, session, template, kv, gate, reply));
       }
     }
   });
@@ -685,6 +747,15 @@ Future<void> _llamaEngineWorker(_Bootstrap boot) async {
 /// so the free path (mtmd/ctx/model dispose on unload) stays ours. The image
 /// bitmaps are built and freed inside `evalChunks` (its `finally`), so no
 /// image buffer outlives this call.
+///
+/// No prefix-KV reuse here (unlike `_runGenerate`): this always fully resets
+/// seq 0's KV before prefill (below). mtmd's chunks aren't a simple token-id
+/// sequence — image chunks are opaque embeddings evaluated through
+/// `evalChunks`, not addressable the way a longest-common-prefix diff over
+/// plain token ids needs — so there's no cheap, safe way to diff "what's
+/// resident" turn over turn on this path. A full reset every multimodal turn
+/// is correct, if not optimal; the caller-visible cost is the same as it was
+/// before this change.
 Future<void> _runGenerateMedia(
   _GenerateCommand cmd,
   llama.LlamaContext context,
@@ -813,19 +884,83 @@ final class _GenGate {
   bool cancelRequested = false;
 }
 
+/// Tracks the token sequence resident in KV cache for seq 0, across
+/// `_runGenerate` calls, for the life of one worker isolate (one model load).
+///
+/// Empty means "nothing known-resident" — the next call does a full KV clear
+/// before decoding, exactly like the old unconditional `session.clear()`.
+/// Reset to empty by the dispatcher before any `_runGenerateMedia` call (see
+/// its comment) and by `_runGenerate` itself on any error, so a later turn
+/// never assumes a resident prefix we can no longer prove is actually there.
+final class _KvState {
+  List<int> tokens = const [];
+}
+
+/// Best-effort token length of just the system-prompt turn, rendered alone,
+/// for use as `ContextShift.nKeep` — "keep the system prompt" per the shift
+/// policy below. Returns 0 (no protected prefix) when there's no system
+/// turn, no template, or rendering/tokenizing it alone fails for any reason;
+/// a wrong/small nKeep only affects how aggressively a shift trims history,
+/// never correctness (see [Generator]'s own `nKeep` clamping).
+int _systemPromptTokenCount(
+  String? template,
+  List<llama.ChatMessage>? messages,
+  llama.Tokenizer tokenizer,
+) {
+  if (template == null || messages == null) return 0;
+  llama.ChatMessage? system;
+  for (final m in messages) {
+    if (m.role == 'system') {
+      system = m;
+      break;
+    }
+  }
+  if (system == null) return 0;
+  try {
+    final rendered = llama.ChatTemplate.apply(
+      template: template,
+      messages: [system],
+      addAssistant: false,
+    );
+    return tokenizer.encode(rendered, addSpecial: true).length;
+  } catch (_) {
+    return 0;
+  }
+}
+
+/// Text generation with prefix-KV reuse across turns (the main win of this
+/// change). Each turn re-renders the WHOLE conversation via `ChatTemplate`
+/// (as before — the package doesn't support incremental template rendering),
+/// tokenizes it, and diffs it against [kv]'s resident sequence with a
+/// longest-common-prefix scan. Only the diverging suffix — normally just the
+/// latest turn(s) — is decoded; everything before the divergence point stays
+/// in KV untouched. Falls back to a full clear + full decode (today's old
+/// behaviour) whenever nothing is reusable (`p == 0`: first turn, a reset
+/// conversation, a different system prompt, or anything else that changed
+/// the render from the very first token).
+///
+/// Uses `Generator`/`Request` directly (the same primitives `LlamaSession.
+/// generate()` is built on — see session.dart) instead of `LlamaSession`
+/// itself: `LlamaSession`'s own token/kvHead bookkeeping only supports
+/// monotonic appends, with no public way to tell it "the first P tokens are
+/// already resident, everything else isn't" after we trim the KV out from
+/// under it. `Request.startPos` gives us that directly.
 Future<void> _runGenerate(
   _GenerateCommand cmd,
   llama.LlamaSession session,
   String? template,
+  _KvState kv,
   _GenGate gate,
   SendPort reply,
 ) async {
   gate.inFlightId = cmd.id;
   gate.cancelRequested = false;
+  final context = session.context;
+  final tokenizer = session.tokenizer;
+  llama.Generator? generator;
   try {
-    // Each call is independent: reset KV + history first.
-    session.clear();
-
+    final String rendered;
+    final bool addSpecial;
     if (cmd.messages != null) {
       if (template == null) {
         reply.send(
@@ -837,37 +972,108 @@ Future<void> _runGenerate(
         );
         return;
       }
-      final rendered = llama.ChatTemplate.apply(
+      rendered = llama.ChatTemplate.apply(
         template: template,
         messages: cmd.messages!,
         addAssistant: true,
       );
-      session.appendText(rendered, addSpecial: false);
+      addSpecial = false;
     } else {
-      session.appendText(cmd.prompt!, addSpecial: true);
+      rendered = cmd.prompt!;
+      addSpecial = true;
     }
 
-    var count = 0;
-    await for (final event in session.generate(
+    final newTokens = tokenizer.encode(rendered, addSpecial: addSpecial);
+    if (newTokens.isEmpty) {
+      reply.send(
+        _ErrorMsg(
+          cmd.id,
+          _FailKind.validation,
+          'prompt tokenized to zero tokens',
+        ),
+      );
+      return;
+    }
+
+    // Longest common prefix against what's actually resident in KV.
+    final resident = kv.tokens;
+    final maxP = resident.length < newTokens.length
+        ? resident.length
+        : newTokens.length;
+    var p = 0;
+    while (p < maxP && resident[p] == newTokens[p]) {
+      p++;
+    }
+    // A generate call always needs >=1 new prompt token to decode; this only
+    // triggers on a pathological re-send of an already-fully-resident prompt.
+    if (p >= newTokens.length) p = newTokens.length - 1;
+
+    if (p == 0) {
+      // Nothing reusable: full clear, same as the old session.clear().
+      context.memorySeqRm(0);
+    } else if (p < resident.length) {
+      // Drop only the diverging KV suffix — same primitive used by the media
+      // path's own reset (llama_memory_seq_rm).
+      context.memorySeqRm(0, p0: p);
+    }
+    // else p == resident.length: the whole previous turn matched, nothing to
+    // drop — decode just the new suffix below.
+
+    final suffix = newTokens.sublist(p);
+    final promptTokensDecoded = suffix.length;
+
+    final canShift = context.canShift;
+    final request = llama.Request(
+      promptTokens: suffix,
       sampler: cmd.sampler,
       maxTokens: cmd.maxTokens,
-    )) {
+      seqId: 0,
+      startPos: p,
+      shiftPolicy: canShift
+          ? llama.ContextShiftPolicy.auto
+          : llama.ContextShiftPolicy.off,
+      shift: canShift
+          ? llama.ContextShift(
+              nKeep: _systemPromptTokenCount(template, cmd.messages, tokenizer),
+            )
+          : llama.ContextShift.defaults,
+    );
+
+    // Mirrors KV positions exactly as we submit/decode: prefix kept (0..p)
+    // is already correct in `newTokens`, then the suffix, then each
+    // generated token as it's confirmed committed (see below).
+    final working = newTokens.toList();
+    generator = llama.Generator(context, tokenizer);
+    var count = 0;
+    await for (final event in generator.run(request)) {
       // Force one event-loop turn so a pending _CancelCommand is registered
       // between tokens (mirrors llama_cpp_dart worker.dart:835). Without this
       // the microtask-driven generate stream starves the cancel event.
       await Future<void>.delayed(Duration.zero);
       if (gate.cancelRequested) {
+        // The just-received event (if any) was sampled but never committed
+        // to KV (see TokenEvent's own doc comment) — `working` correctly
+        // excludes it, since we only append inside the TokenEvent case below,
+        // which this cancel check runs ahead of.
+        kv.tokens = working;
         reply.send(_DoneMsg(cmd.id, EngineStopReason.cancelled, count));
         return;
       }
       switch (event) {
         case llama.TokenEvent():
+          working.add(event.id);
           count++;
           if (event.text.isNotEmpty) {
             reply.send(_TokenMsg(cmd.id, event.id, event.text));
           }
         case llama.ShiftEvent():
-          break;
+          // KV already mutated by the generator; mirror it in our own
+          // tracked sequence and tell the caller history was trimmed.
+          if (event.nDiscard > 0 &&
+              event.nKeep + event.nDiscard <= working.length) {
+            working.removeRange(event.nKeep, event.nKeep + event.nDiscard);
+          }
+          reply.send(_ShiftMsg(cmd.id, event.nDiscard));
         case llama.DoneEvent():
           if (event.trailingText.isNotEmpty) {
             reply.send(_TokenMsg(cmd.id, -1, event.trailingText));
@@ -877,18 +1083,44 @@ Future<void> _runGenerate(
             llama.StopMaxTokens() => EngineStopReason.maxTokens,
             llama.StopUserAbort() => EngineStopReason.cancelled,
           };
-          reply.send(_DoneMsg(cmd.id, reason, count));
+          // committedPosition excludes the terminal (uncommitted) token —
+          // see DoneEvent's doc comment — so this truncation is exact, not
+          // an approximation.
+          kv.tokens = working.sublist(0, event.committedPosition);
+          reply.send(
+            _DoneMsg(
+              cmd.id,
+              reason,
+              count,
+              promptTokensDecoded: promptTokensDecoded,
+            ),
+          );
           return;
       }
     }
-    reply.send(_DoneMsg(cmd.id, EngineStopReason.endOfSequence, count));
+    // Stream ended without a DoneEvent (shouldn't happen; defensive parity
+    // with the old code's fallback below the loop).
+    kv.tokens = working;
+    reply.send(
+      _DoneMsg(
+        cmd.id,
+        EngineStopReason.endOfSequence,
+        count,
+        promptTokensDecoded: promptTokensDecoded,
+      ),
+    );
   } catch (e, st) {
+    // Unknown KV state after a failure (a partially-submitted prefill chunk,
+    // an error before any KV mutation, etc.) — force a full clear next turn
+    // rather than risk reusing a prefix we can't prove is actually resident.
+    kv.tokens = const [];
     if (gate.cancelRequested) {
       reply.send(_DoneMsg(cmd.id, EngineStopReason.cancelled, 0));
     } else {
       reply.send(_ErrorMsg(cmd.id, _classify(e), '$e\n$st'));
     }
   } finally {
+    generator?.dispose();
     // Clear in-flight id so a late cancel for this (now finished) request is
     // dropped by the listener instead of accumulating.
     if (gate.inFlightId == cmd.id) gate.inFlightId = null;
