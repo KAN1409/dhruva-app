@@ -30,6 +30,13 @@ flutter_ios_podfile_setup
 target 'Runner' do
   use_frameworks!
 
+  # llama_cpp_dart is NOT a Flutter plugin (no `flutter:` key in its
+  # pubspec), so CocoaPods autodiscovery via flutter_install_all_ios_pods
+  # never finds its podspec. Wire it manually, pointing at the vendored copy
+  # (scripts/fetch-ios-xcframework.sh) instead of the pub-cache checkout,
+  # which lacks the prebuilt xcframework build artifact.
+  pod 'llama_cpp', :path => File.expand_path('../Vendor/llama_cpp', __FILE__)
+
   flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
   target 'RunnerTests' do
     inherit! :search_paths
@@ -37,7 +44,35 @@ target 'Runner' do
 end
 
 post_install do |installer|
+  # The vendored llama.xcframework's simulator slice is arm64-only (matches
+  # upstream's own release asset — no x86_64 Mac simulator build). A
+  # generic/universal simulator build (no active-arch destination) defaults
+  # to ARCHS = "arm64 x86_64", and CocoaPods' xcframework-slicing script
+  # (Pods/Target Support Files/llama_cpp/llama_cpp-xcframeworks.sh) requires
+  # ONE slice covering every requested arch — with x86_64 in the mix, no
+  # slice matches, so it silently skips the copy (prints a "warning: unable
+  # to find matching slice" and returns) and the linker later fails with
+  # "framework 'llama' not found". Exclude x86_64 on BOTH projects Xcode
+  # actually builds here: the Pods project (llama_cpp's own target runs this
+  # script) and the Runner user project (links against the copied result).
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)
+    target.build_configurations.each do |config|
+      config.build_settings['EXCLUDED_ARCHS[sdk=iphonesimulator*]'] = 'i386 x86_64'
+    end
   end
+  # Set directly on the Runner target's own build settings (not an xcconfig
+  # file): Flutter's Debug/Release/Profile.xcconfig #include Pods-Runner's
+  # xcconfig BEFORE Generated.xcconfig, and Generated.xcconfig already sets
+  # EXCLUDED_ARCHS[sdk=iphonesimulator*]=i386 — later #include wins, so an
+  # xcconfig-level override here would silently be discarded. A build setting
+  # on the target itself always wins over any included xcconfig.
+  runner_project_path = File.expand_path('Runner.xcodeproj', __dir__)
+  runner_project = Xcodeproj::Project.open(runner_project_path)
+  runner_project.targets.each do |target|
+    target.build_configurations.each do |config|
+      config.build_settings['EXCLUDED_ARCHS[sdk=iphonesimulator*]'] = 'i386 x86_64'
+    end
+  end
+  runner_project.save
 end
