@@ -10,7 +10,7 @@
 set -euo pipefail
 
 FIREBASE_PROJECT="dhruvaai-68a00"
-ANDROID_APP_ID="1:792596873288:android:2bcb808b7abf3b737bd87d"
+ANDROID_APP_ID="1:792596873288:android:085525f8ec5de6577bd87d"
 GROUPS_ARG="${2:-internal-testers}"
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"

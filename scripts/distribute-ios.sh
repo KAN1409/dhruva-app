@@ -15,9 +15,10 @@
 # IDEDistribution.framework only recognizes "ad-hoc" as a command-line
 # distribution-method name; it does NOT have "release-testing").
 #
-# NOTE: iOS bundle ID (app.dhruva.mobile) differs from Android's
-# (tech.appuinside.dhruva) — the original ID could not be registered with
-# Apple. Android is unaffected and already shipped under the old ID.
+# NOTE: iOS bundle ID and Android applicationId are both app.dhruva.mobile
+# (the original tech.appuinside.dhruva could not be registered with Apple,
+# so Android was renamed to match, dropping the old app.dhruva.mobile/
+# tech.appuinside.dhruva split this comment used to describe).
 #
 # CI later reuses this same script with a token (Loop 13 / checkpoint H3).
 set -euo pipefail

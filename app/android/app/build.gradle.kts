@@ -21,7 +21,7 @@ android {
 
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "tech.appuinside.dhruva"
+        applicationId = "app.dhruva.mobile"
         // Device floor is minSdk 26 (DECISIONS.md "DEVICE FLOOR"); also the
         // floor the llama-cpp-dart AAR declares. flutter.minSdkVersion is 24 by
         // default, so pin 26 explicitly here.
