@@ -130,6 +130,12 @@ dev_dependencies:
   # tiny custom dio HttpClientAdapter (test/support/mock_hf_client.dart) feeds
   # them to the migrated dio-based HfApiClient. Production code uses dio only.
   http: ^1.6.0
+  # iOS-metal-wiring: integration_test drives the REAL app process on the iOS
+  # Simulator (unlike `flutter test`, which runs on the host) — the only way
+  # to prove the CocoaPods-vendored llama.xcframework actually dyld-loads on
+  # iOS, not just that macOS/Android do. See integration_test/.
+  integration_test:
+    sdk: flutter
   json_serializable: ^6.14.0
   path_provider_platform_interface: ^2.1.3
   plugin_platform_interface: ^2.1.8
