@@ -38,8 +38,11 @@ import '../device_info/device_info_service.dart';
 final engineServiceProvider = Provider<EngineService>((ref) {
   // Android ships the native libs inside the AAR (jni/arm64-v8a/libllama.so),
   // dlopen'd by basename — Android resolves it from the app's lib dir, and its
-  // NEEDED deps (libggml*, libmtmd) alongside. iOS/macOS static-link the
-  // xcframework/dylib into the process, so the worker loads from the process.
+  // NEEDED deps (libggml*, libmtmd) alongside. iOS dynamically embeds the
+  // vendored llama.xcframework via CocoaPods (`use_frameworks!` + the
+  // `llama_cpp` pod, ios/Vendor/llama_cpp) — dyld loads + signs it into the
+  // process at launch, so its symbols are visible to
+  // `LlamaLibrary.loadFromProcess()`. Not a static link.
   final service = LlamaEngineService(
     libraryPath: Platform.isAndroid ? 'libllama.so' : null,
   );

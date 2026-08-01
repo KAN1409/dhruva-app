@@ -145,8 +145,10 @@ EngineFailure _failureFromKind(_FailKind kind, String message) =>
 
 final class LlamaEngineService implements EngineService {
   /// Absolute path to `libllama.dylib` / `libllama.so`. When null the worker
-  /// resolves symbols from the running process (iOS / macOS xcframework that
-  /// Xcode statically linked). On Android pass the basename `'libllama.so'`.
+  /// resolves symbols from the running process (iOS: the vendored
+  /// llama.xcframework, dynamically embedded + signed by CocoaPods via
+  /// `use_frameworks!`, not statically linked). On Android pass the basename
+  /// `'libllama.so'`.
   final String? libraryPath;
 
   /// Ceiling on how long [load] waits for the worker's ready handshake before
