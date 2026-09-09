@@ -576,7 +576,7 @@ human: app identity + star motif, version, three Fraunces pull quotes
 drawn from brand-proposal.md §a/§d — pole star myth, the onboarding
 privacy line verbatim, device-ownership — developer credit block, links
 row for GitHub/website/Apache-2.0 license, privacy one-liner). Credit row
-("Made with ❤️ by Ansh Singh Rajput" → anshgandharva.online, Amendment 2b)
+("Made with ❤️ by Ansh Singh Rajput" → anshgandharva.in, Amendment 2b)
 lives on the About page as the canonical copy, with the same widget
 (`features/settings/widgets/credit_row.dart`) reused as a slim Settings
 shortcut. `core/theme/brand_star.dart`: a deliberate, documented

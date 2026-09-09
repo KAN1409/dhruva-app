@@ -85,7 +85,7 @@ void main() {
     await tester.tap(find.text(' by Ansh Singh Rajput'));
     await tester.pumpAndSettle();
 
-    expect(fakeLauncher.launched, contains('https://anshgandharva.online'));
+    expect(fakeLauncher.launched, contains('https://anshgandharva.in'));
   });
 
   testWidgets('GitHub row launches the repo URL', (tester) async {

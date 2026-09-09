@@ -118,7 +118,7 @@ Reminder: NO Firebase SDKs inside the app — distribution only (Rule 5).
 (a) DEPLOYMENT: when the website is complete end-to-end (Loop 12 gate), deploy
 production to Vercel (primary), keeping the GitHub Pages pipeline as-is.
 (b) CREDIT: "Made with ❤️ by Ansh Singh Rajput" linking to
-https://anshgandharva.online. Website: sticky bottom bar on ALL pages
+https://anshgandharva.in. Website: sticky bottom bar on ALL pages
 (appears at lowest scroll). App: on the settings/about surface ONLY (not all
 pages) — lands with the first settings screen (target Loop 5, before wider
 distribution).

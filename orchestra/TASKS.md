@@ -48,7 +48,7 @@ genuinely pleasant offline chat. Tag v0.1.0-alpha at MVP gate.
   RepaintBoundary on bubbles, O(n²) _rawBuffer accumulation; profile in the
   Loop 11 performance pass
 - App credit row (AMENDMENT 2b): "Made with ❤️ by Ansh Singh Rajput" →
-  anshgandharva.online on the settings/about surface — land in Loop 5
+  anshgandharva.in on the settings/about surface — land in Loop 5
 - Vercel production deploy of website at Loop 12 gate (AMENDMENT 2a)
 - Downloads: same-basename subfolder collision (a/model.gguf vs b/model.gguf
   flatten to one local name) — encode subfolder into on-disk name when a real

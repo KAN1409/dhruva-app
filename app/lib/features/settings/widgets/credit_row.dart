@@ -1,5 +1,5 @@
 /// Amendment 2b, EXACT copy: "Made with ❤️ by Ansh Singh Rajput", tapping
-/// opens https://anshgandharva.online. The About page (Amendment 4, the
+/// opens https://anshgandharva.in. The About page (Amendment 4, the
 /// UX-amendment follow-up) is its canonical home; Settings keeps this same
 /// slim row as a shortcut rather than duplicating the copy.
 library;

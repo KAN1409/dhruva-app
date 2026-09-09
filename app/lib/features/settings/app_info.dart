@@ -15,4 +15,4 @@ const appBuildNumber = '78';
 const githubUrl = 'https://github.com/AnshRajput/dhruva-app';
 const websiteUrl = 'https://dhruvaai.vercel.app';
 const licenseUrl = 'https://github.com/AnshRajput/dhruva-app/blob/main/LICENSE';
-const creatorUrl = 'https://anshgandharva.online';
+const creatorUrl = 'https://anshgandharva.in';
